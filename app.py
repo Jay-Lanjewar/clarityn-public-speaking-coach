@@ -12,15 +12,34 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+
+def configure_ffmpeg():
+    """Make ffmpeg discoverable without relying on a machine-specific path."""
+    if shutil.which("ffmpeg"):
+        return shutil.which("ffmpeg")
+
+    ffmpeg_path = os.getenv("FFMPEG_PATH") or os.getenv("FFMPEG_BINARY")
+    if not ffmpeg_path:
+        return None
+
+    if os.path.isdir(ffmpeg_path):
+        ffmpeg_dir = ffmpeg_path
+    else:
+        ffmpeg_dir = os.path.dirname(ffmpeg_path)
+
+    if ffmpeg_dir and os.path.isdir(ffmpeg_dir):
+        os.environ["PATH"] = ffmpeg_dir + os.pathsep + os.environ.get("PATH", "")
+
+    return shutil.which("ffmpeg")
+
+
 # Added: cached Whisper model loader.
 @st.cache_resource
 def load_model():
     return whisper.load_model("base")
 
 
-os.environ["PATH"] += os.pathsep + r"C:\Users\ravil\Downloads\ffmpeg-8.1-essentials_build\ffmpeg-8.1-essentials_build\bin"
-
-print("FFMPEG DETECTED:", shutil.which("ffmpeg"))
+print("FFMPEG DETECTED:", configure_ffmpeg())
 
 
 # Feature 1: Lightweight user profile storage folder.
