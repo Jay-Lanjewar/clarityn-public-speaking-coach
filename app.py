@@ -6,10 +6,11 @@ import re
 import shutil
 import csv
 from datetime import datetime
-
 import pandas as pd
 from google import genai
+from dotenv import load_dotenv
 
+load_dotenv()
 
 # Added: cached Whisper model loader.
 @st.cache_resource
@@ -22,22 +23,36 @@ os.environ["PATH"] += os.pathsep + r"C:\Users\ravil\Downloads\ffmpeg-8.1-essenti
 print("FFMPEG DETECTED:", shutil.which("ffmpeg"))
 
 
-# Feature 2: Progress tracking helpers using a local CSV file.
-PROGRESS_FILE = "progress.csv"
+# Feature 1: Lightweight user profile storage folder.
+DATA_DIR = "data"
 PROGRESS_FIELDS = ["timestamp", "word_count", "wpm", "filler_count", "confidence_score"]
 
 
-def ensure_progress_file():
-    if not os.path.exists(PROGRESS_FILE):
-        with open(PROGRESS_FILE, "w", newline="", encoding="utf-8") as file:
+def sanitize_username(username):
+    safe_name = re.sub(r"[^a-zA-Z0-9_-]+", "_", username.strip().lower())
+    return safe_name.strip("_")
+
+
+# Feature 1 and 2: Build a dynamic per-user progress file inside data/.
+def get_progress_file(username):
+    os.makedirs(DATA_DIR, exist_ok=True)
+    return os.path.join(DATA_DIR, f"{username}.csv")
+
+
+# Feature 2: Progress file helpers now accept a dynamic progress_file parameter.
+def ensure_progress_file(progress_file):
+    os.makedirs(os.path.dirname(progress_file), exist_ok=True)
+
+    if not os.path.exists(progress_file):
+        with open(progress_file, "w", newline="", encoding="utf-8") as file:
             writer = csv.DictWriter(file, fieldnames=PROGRESS_FIELDS)
             writer.writeheader()
 
 
-def save_progress(word_count, wpm, filler_count, confidence_score):
-    ensure_progress_file()
+def save_progress(progress_file, word_count, wpm, filler_count, confidence_score):
+    ensure_progress_file(progress_file)
 
-    with open(PROGRESS_FILE, "a", newline="", encoding="utf-8") as file:
+    with open(progress_file, "a", newline="", encoding="utf-8") as file:
         writer = csv.DictWriter(file, fieldnames=PROGRESS_FIELDS)
         writer.writerow({
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -48,9 +63,9 @@ def save_progress(word_count, wpm, filler_count, confidence_score):
         })
 
 
-def load_progress():
-    ensure_progress_file()
-    return pd.read_csv(PROGRESS_FILE)
+def load_progress(progress_file):
+    ensure_progress_file(progress_file)
+    return pd.read_csv(progress_file)
 
 
 # Feature 4: Improvement metric helpers.
@@ -94,6 +109,15 @@ def calculate_improvement_messages(progress_df):
         messages.append("➖ Confidence score stayed the same")
 
     return messages
+
+
+# Feature 4: Overall performance label based on confidence score.
+def get_performance_label(confidence_score):
+    if confidence_score >= 8:
+        return "Excellent"
+    if confidence_score >= 6:
+        return "Good"
+    return "Needs Improvement"
 
 
 # Gemini feedback with local fallback.
@@ -253,14 +277,27 @@ Give:
 
 
 # ---------------- UI ----------------
-st.set_page_config(page_title="CutTheUm", layout="centered")
+st.set_page_config(page_title="Clarityn", layout="centered")
 
-st.title("CutTheUm - Speaking Coach")
-# Feature 5: UI polish with clearer intro spacing and section organization.
-st.write("Upload your speech (MP3, WAV, M4A) and get instant AI coaching feedback.")
+st.title("Clarityn")
+st.caption("AI-powered speaking intelligence.")
+# Feature 5: Better page organization with clearer top controls.
+st.write("Upload your speech and receive detailed AI-powered speaking analysis, coaching feedback, and progress tracking.")
 st.divider()
 
-# Feature 1: Coaching style selector added near the top of the UI.
+# Feature 1: Lightweight user profile input near the top, without auth or passwords.
+username = st.text_input("👤 Enter your name")
+safe_username = sanitize_username(username)
+progress_file = None
+
+if username and not safe_username:
+    st.warning("Please enter at least one letter or number for your name.")
+elif safe_username:
+    # Feature 1: Automatically create the user's progress file if it does not exist.
+    progress_file = get_progress_file(safe_username)
+    ensure_progress_file(progress_file)
+
+# Existing feature: Coaching style selector near the top of the UI.
 feedback_mode = st.selectbox(
     "🎯 Coaching Style",
     ["Balanced", "Strict"]
@@ -268,11 +305,19 @@ feedback_mode = st.selectbox(
 st.divider()
 
 # ---------------- Upload ----------------
-# Feature 5: UI polish with consistent subheaders and separators.
+# Feature 5: Better page organization starts with a focused upload section.
 st.subheader("🎙️ Upload Speech")
 audio_file = st.file_uploader("Upload audio", type=["mp3", "wav", "m4a"])
 
 if audio_file:
+    # Feature 1: Username is required before any analysis runs.
+    if not safe_username:
+        st.warning("👤 Please enter your name before analysis.")
+        st.stop()
+
+    # Feature 1 and 2: Each user gets a separate local progress CSV.
+    progress_file = progress_file or get_progress_file(safe_username)
+
     # Save file temporarily
     with tempfile.NamedTemporaryFile(delete=False) as tmp:
         tmp.write(audio_file.read())
@@ -289,13 +334,6 @@ if audio_file:
 
     text = result["text"]
     language = result.get("language", "unknown")
-
-    # ---------------- Output: Transcription ----------------
-    st.divider()
-    st.subheader("📝 Transcription")
-    st.write(text)
-
-    st.write(f"🌍 Detected Language: **{language.upper()}**")
 
     # ---------------- Analysis ----------------
     words = text.split()
@@ -316,21 +354,9 @@ if audio_file:
     if words and len(set(words)) / len(words) < 0.5:
         flags.append("⚠️ Repetitive wording detected")
 
-    st.divider()
-    st.subheader("🚩 Speech Quality Flags")
-
-    if flags:
-        for f in flags:
-            st.write(f)
-    else:
-        st.write("✅ No major structural issues detected.")
-
     # ---------------- Sentence Analysis ----------------
     sentences = re.split(r'[.!?]', text)
-    st.divider()
-    st.subheader("📌 Sentence Review")
-
-    found_issue = False
+    weak_sentences = []
 
     for s in sentences:
         s = s.strip()
@@ -338,11 +364,7 @@ if audio_file:
             continue
 
         if any(filler in s.lower() for filler in ["um", "uh", "like", "basically"]):
-            st.write(f"⚠️ Weak sentence: {s}")
-            found_issue = True
-
-    if not found_issue:
-        st.write("✅ No obvious weak sentences detected.")
+            weak_sentences.append(s)
 
     # Multilingual filler words
     filler_words = [
@@ -356,15 +378,7 @@ if audio_file:
     speech_words = re.findall(r'\b\w+\b', text.lower())
     filler_count = sum(1 for word in speech_words if word in filler_words)
 
-    # ---------------- Display Analysis ----------------
-    st.divider()
-    st.subheader("📊 Analysis")
-    st.write(f"🧾 Total Words: {word_count}")
-    st.write(f"⚡ Speaking Speed: {round(wpm, 2)} WPM")
-    st.write(f"🗣️ Filler Words Used: {filler_count}")
-
     # Existing feature: Filler word highlighting without changing original transcription.
-    st.subheader("🔍 Filler Word Highlight")
     highlighted_text = text
 
     for word in filler_words:
@@ -374,12 +388,7 @@ if audio_file:
             highlighted_text
         )
 
-    st.markdown(highlighted_text)
-
     # ---------------- Feedback Engine ----------------
-    st.divider()
-    st.subheader("🧠 Feedback")
-
     feedback = []
 
     # Speed feedback
@@ -405,12 +414,12 @@ if audio_file:
     confidence_score = max(1, min(10, confidence_score))
     feedback.append(f"💪 Confidence Score: {round(confidence_score, 1)}/10")
 
-    # Show feedback
-    for f in feedback:
-        st.write(f)
+    # Feature 4: Overall performance label.
+    performance_label = get_performance_label(confidence_score)
 
-    # Feature 2: Save progress after each completed analysis, guarded against Streamlit rerun duplicates.
+    # Feature 2: Save user-specific progress after each completed analysis.
     progress_signature = (
+        safe_username,
         audio_file.name,
         getattr(audio_file, "size", 0),
         word_count,
@@ -420,42 +429,107 @@ if audio_file:
     )
 
     if st.session_state.get("last_progress_signature") != progress_signature:
-        save_progress(word_count, wpm, filler_count, confidence_score)
+        save_progress(progress_file, word_count, wpm, filler_count, confidence_score)
         st.session_state["last_progress_signature"] = progress_signature
 
-    # Feature 3 and 4: Progress history display with improvement metrics.
+    progress_df = load_progress(progress_file)
+
+    # Feature 5: Better page organization with tabs instead of one long results page.
     st.divider()
-    st.subheader("📈 Progress History")
-    progress_df = load_progress()
-    st.dataframe(progress_df.tail(5), use_container_width=True)
+    analysis_tab, ai_feedback_tab, progress_tab = st.tabs([
+        "📊 Analysis",
+        "🤖 AI Feedback",
+        "📈 Progress"
+    ])
 
-    st.subheader("📌 Improvement Metrics")
-    for message in calculate_improvement_messages(progress_df):
-        st.write(message)
+    with analysis_tab:
+        st.subheader("📝 Transcription")
+        st.write(text)
+        st.write(f"🌍 Detected Language: **{language.upper()}**")
 
-    # ---------------- AI Feedback ----------------
-    st.divider()
-    st.subheader("🤖 AI Feedback")
+        st.subheader("📊 Analysis")
+        st.write(f"🧾 Total Words: {word_count}")
+        st.write(f"⚡ Speaking Speed: {round(wpm, 2)} WPM")
+        st.write(f"🗣️ Filler Words Used: {filler_count}")
+        # Feature 4: Display overall performance based on the current confidence score.
+        st.write(f"🏆 Overall Performance: {performance_label}")
 
-    if st.button("Generate AI Feedback"):
-        with st.spinner("Generating AI feedback..."):
-            ai_feedback, ai_error = generate_gemini_feedback(
-                text,
-                word_count,
-                wpm,
-                filler_count,
-                feedback_mode,
-                flags,
-                sentences
-            )
-
-        if ai_error:
-            st.error(ai_error)
+        st.subheader("🚩 Speech Quality Flags")
+        if flags:
+            for f in flags:
+                st.write(f)
         else:
-            st.write(ai_feedback)
+            st.write("✅ No major structural issues detected.")
 
-    st.write(f"🧠 Detected filler words: {', '.join([w for w in speech_words if w in filler_words])}")
-    if os.getenv("GEMINI_API_KEY"):
-        st.write("🟢 Using Gemini API")
-    else:
-        st.write("🟡 Using Local Fallback")
+        st.subheader("📌 Sentence Review")
+        if weak_sentences:
+            for sentence in weak_sentences:
+                st.write(f"⚠️ Weak sentence: {sentence}")
+        else:
+            st.write("✅ No obvious weak sentences detected.")
+
+        st.subheader("🔍 Filler Word Highlight")
+        st.markdown(highlighted_text)
+
+        st.subheader("🧠 Feedback")
+        for f in feedback:
+            st.write(f)
+
+        detected_fillers = [w for w in speech_words if w in filler_words]
+        st.write(f"🧠 Detected filler words: {', '.join(detected_fillers)}")
+
+    with ai_feedback_tab:
+        st.subheader("🤖 AI Feedback")
+
+        if st.button("Generate AI Feedback"):
+            with st.spinner("Generating AI feedback..."):
+                ai_feedback, ai_error = generate_gemini_feedback(
+                    text,
+                    word_count,
+                    wpm,
+                    filler_count,
+                    feedback_mode,
+                    flags,
+                    sentences
+                )
+
+            if ai_error:
+                st.error(ai_error)
+            else:
+                st.write(ai_feedback)
+
+        if os.getenv("GEMINI_API_KEY"):
+            st.write("🟢 Using Gemini API")
+        else:
+            st.write("🟡 Using Local Fallback")
+
+    with progress_tab:
+        st.subheader("📈 Progress History")
+        st.caption(f"Showing progress for {username.strip()}")
+        st.dataframe(progress_df.tail(5), width="stretch")
+
+        st.subheader("📌 Improvement Metrics")
+        for message in calculate_improvement_messages(progress_df):
+            st.write(message)
+
+        # Feature 3: Analytics charts using Streamlit native line charts.
+        st.subheader("📉 Analytics Trends")
+        chart_df = progress_df.tail(10).copy()
+
+        if chart_df.empty:
+            st.write("No progress entries yet.")
+        else:
+            chart_df["timestamp"] = chart_df["timestamp"].astype(str)
+            chart_df = chart_df.set_index("timestamp")
+
+            st.write("Confidence Score Trend")
+            st.line_chart(chart_df[["confidence_score"]])
+
+            st.write("Filler Word Trend")
+            st.line_chart(chart_df[["filler_count"]])
+
+            st.write("WPM Trend")
+            st.line_chart(chart_df[["wpm"]])
+
+st.divider()
+st.caption("Built with Whisper + Gemini AI")

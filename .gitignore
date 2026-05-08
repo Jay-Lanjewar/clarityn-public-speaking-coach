@@ -1,5 +1,38 @@
-.env
-.venv/
-.streamlit/secrets.toml
+# Python
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+
+# Virtual environment
+.venv/
+venv/
+
+# Environment variables
+.env
+
+# Streamlit cache
+.streamlit/
+
+# Temporary files
+*.tmp
+temp/
+
+# Progress/user data
+data/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# VSCode
+.vscode/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Whisper models cache
+.cache/
+
+# Logs
+*.log
