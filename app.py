@@ -324,17 +324,26 @@ def analyze_audio(audio_path, audio_signature, source_label):
     # Feature 1 and 2: Each user gets a separate local progress CSV.
     progress_file = progress_file or get_progress_file(safe_username)
 
-    st.info("Transcribing...")
+    stage_progress = st.progress(0, text="Preparing speech analysis...")
+    stage_status = st.status("Analyzing speech", expanded=True)
+
+    stage_status.write("\U0001f399\ufe0f Audio received")
+    stage_progress.progress(10, text="\U0001f399\ufe0f Audio received")
+
+    stage_status.update(label="\U0001f9e0 Transcribing speech...", state="running")
+    stage_status.write("\U0001f9e0 Transcribing speech...")
+    stage_progress.progress(30, text="\U0001f9e0 Transcribing speech...")
 
     # Changed: initialize cached Whisper model before transcription.
     model = load_model()
-
-    # Changed: wrap transcription in a loading spinner.
-    with st.spinner("Analyzing your speech..."):
-        result = model.transcribe(audio_path)
+    result = model.transcribe(audio_path)
 
     text = result["text"]
     language = result.get("language", "unknown")
+
+    stage_status.update(label="\U0001f4ca Analyzing speaking patterns...", state="running")
+    stage_status.write("\U0001f4ca Analyzing speaking patterns...")
+    stage_progress.progress(50, text="\U0001f4ca Analyzing speaking patterns...")
 
     # ---------------- Analysis ----------------
     words = text.split()
@@ -367,6 +376,10 @@ def analyze_audio(audio_path, audio_signature, source_label):
         if any(filler in s.lower() for filler in ["um", "uh", "like", "basically"]):
             weak_sentences.append(s)
 
+    stage_status.update(label="\U0001f5e3\ufe0f Detecting filler words...", state="running")
+    stage_status.write("\U0001f5e3\ufe0f Detecting filler words...")
+    stage_progress.progress(70, text="\U0001f5e3\ufe0f Detecting filler words...")
+
     # Multilingual filler words
     filler_words = [
         "um", "uh", "like", "basically", "actually",
@@ -388,6 +401,10 @@ def analyze_audio(audio_path, audio_signature, source_label):
             lambda m: f"**{m.group(0)}**",
             highlighted_text
         )
+
+    stage_status.update(label="\U0001f916 Generating AI feedback...", state="running")
+    stage_status.write("\U0001f916 Generating AI feedback...")
+    stage_progress.progress(85, text="\U0001f916 Generating AI feedback...")
 
     # ---------------- Feedback Engine ----------------
     feedback = []
@@ -434,6 +451,10 @@ def analyze_audio(audio_path, audio_signature, source_label):
         st.session_state["last_progress_signature"] = progress_signature
 
     progress_df = load_progress(progress_file)
+
+    stage_status.write("\u2705 Analysis complete")
+    stage_status.update(label="\u2705 Analysis complete", state="complete", expanded=False)
+    stage_progress.progress(100, text="\u2705 Analysis complete")
 
     # Feature 5: Better page organization with tabs instead of one long results page.
     st.divider()
