@@ -5,10 +5,16 @@ import os
 import re
 import shutil
 import csv
+import hashlib
 from datetime import datetime
 import pandas as pd
 from google import genai
 from dotenv import load_dotenv
+
+try:
+    from streamlit_mic_recorder import mic_recorder
+except ImportError:
+    mic_recorder = None
 
 load_dotenv()
 
@@ -94,7 +100,7 @@ def get_balanced_wpm_distance(wpm):
 
 def calculate_improvement_messages(progress_df):
     if len(progress_df) < 2:
-        return ["ℹ️ Complete another analysis to see improvement metrics."]
+        return ["Complete another analysis to see improvement metrics."]
 
     previous = progress_df.iloc[-2]
     current = progress_df.iloc[-1]
@@ -102,30 +108,30 @@ def calculate_improvement_messages(progress_df):
 
     filler_diff = int(current["filler_count"] - previous["filler_count"])
     if filler_diff < 0:
-        messages.append(f"✅ Filler words reduced by {abs(filler_diff)}")
+        messages.append(f"Filler words reduced by {abs(filler_diff)}")
     elif filler_diff > 0:
-        messages.append(f"⚠️ Filler words increased by {filler_diff}")
+        messages.append(f"Filler words increased by {filler_diff}")
     else:
-        messages.append("➖ Filler word count stayed the same")
+        messages.append("Filler word count stayed the same")
 
     previous_wpm_distance = get_balanced_wpm_distance(float(previous["wpm"]))
     current_wpm_distance = get_balanced_wpm_distance(float(current["wpm"]))
     wpm_diff = round(abs(float(current["wpm"]) - float(previous["wpm"])), 1)
 
     if current_wpm_distance < previous_wpm_distance:
-        messages.append(f"✅ WPM became more balanced by {wpm_diff} WPM")
+        messages.append(f"WPM became more balanced by {wpm_diff} WPM")
     elif current_wpm_distance > previous_wpm_distance:
-        messages.append(f"⚠️ WPM moved farther from the balanced range by {wpm_diff} WPM")
+        messages.append(f"WPM moved farther from the balanced range by {wpm_diff} WPM")
     else:
-        messages.append("➖ WPM balance stayed about the same")
+        messages.append("WPM balance stayed about the same")
 
     confidence_diff = round(float(current["confidence_score"]) - float(previous["confidence_score"]), 1)
     if confidence_diff > 0:
-        messages.append(f"✅ Confidence improved by {confidence_diff} points")
+        messages.append(f"Confidence improved by {confidence_diff} points")
     elif confidence_diff < 0:
-        messages.append(f"⚠️ Confidence decreased by {abs(confidence_diff)} points")
+        messages.append(f"Confidence decreased by {abs(confidence_diff)} points")
     else:
-        messages.append("➖ Confidence score stayed the same")
+        messages.append("Confidence score stayed the same")
 
     return messages
 
@@ -172,7 +178,7 @@ def generate_gemini_feedback(text, word_count, wpm, filler_count, feedback_mode,
             strengths.append("You completed a speech sample with enough content to analyze.")
         else:
             weaknesses.append("The transcription appears empty or too short to analyze fully.")
-            tips.append("Upload a clearer or longer speech sample for better feedback.")
+            tips.append("Upload or record a clearer or longer speech sample for better feedback.")
 
         if not tips:
             tips.append("Keep practicing with the same structure and focus on stronger vocal variety.")
@@ -295,54 +301,30 @@ Give:
         return fallback_feedback, None
 
 
-# ---------------- UI ----------------
-st.set_page_config(page_title="Clarityn", layout="centered")
+def get_audio_suffix(audio_format, default="wav"):
+    extension = str(audio_format or default).split("/")[-1].lower()
+    extension = re.sub(r"[^a-z0-9]+", "", extension) or default
+    return f".{extension}"
 
-st.title("Clarityn")
-st.caption("AI-powered speaking intelligence.")
-# Feature 5: Better page organization with clearer top controls.
-st.write("Upload your speech and receive detailed AI-powered speaking analysis, coaching feedback, and progress tracking.")
-st.divider()
 
-# Feature 1: Lightweight user profile input near the top, without auth or passwords.
-username = st.text_input("👤 Enter your name")
-safe_username = sanitize_username(username)
-progress_file = None
+def write_temp_audio(audio_bytes, suffix):
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        tmp.write(audio_bytes)
+        return tmp.name
 
-if username and not safe_username:
-    st.warning("Please enter at least one letter or number for your name.")
-elif safe_username:
-    # Feature 1: Automatically create the user's progress file if it does not exist.
-    progress_file = get_progress_file(safe_username)
-    ensure_progress_file(progress_file)
 
-# Existing feature: Coaching style selector near the top of the UI.
-feedback_mode = st.selectbox(
-    "🎯 Coaching Style",
-    ["Balanced", "Strict"]
-)
-st.divider()
+def analyze_audio(audio_path, audio_signature, source_label):
+    global progress_file
 
-# ---------------- Upload ----------------
-# Feature 5: Better page organization starts with a focused upload section.
-st.subheader("🎙️ Upload Speech")
-audio_file = st.file_uploader("Upload audio", type=["mp3", "wav", "m4a"])
-
-if audio_file:
     # Feature 1: Username is required before any analysis runs.
     if not safe_username:
-        st.warning("👤 Please enter your name before analysis.")
-        st.stop()
+        st.warning("Please enter your name before analysis.")
+        return
 
     # Feature 1 and 2: Each user gets a separate local progress CSV.
     progress_file = progress_file or get_progress_file(safe_username)
 
-    # Save file temporarily
-    with tempfile.NamedTemporaryFile(delete=False) as tmp:
-        tmp.write(audio_file.read())
-        audio_path = tmp.name
-
-    st.info("⏳ Transcribing...")
+    st.info("Transcribing...")
 
     # Changed: initialize cached Whisper model before transcription.
     model = load_model()
@@ -365,13 +347,13 @@ if audio_file:
     flags = []
 
     if "today i am going to talk" in text.lower():
-        flags.append("⚠️ Weak opening detected (too generic)")
+        flags.append("Weak opening detected (too generic)")
 
     if text.count(".") < 3:
-        flags.append("⚠️ Speech may lack structure")
+        flags.append("Speech may lack structure")
 
     if words and len(set(words)) / len(words) < 0.5:
-        flags.append("⚠️ Repetitive wording detected")
+        flags.append("Repetitive wording detected")
 
     # ---------------- Sentence Analysis ----------------
     sentences = re.split(r'[.!?]', text)
@@ -412,26 +394,26 @@ if audio_file:
 
     # Speed feedback
     if wpm > 170:
-        feedback.append("⚠️ You are speaking too fast. Try slowing down for clarity.")
+        feedback.append("You are speaking too fast. Try slowing down for clarity.")
     elif wpm < 120:
-        feedback.append("⚠️ You are speaking too slow. Add more energy and flow.")
+        feedback.append("You are speaking too slow. Add more energy and flow.")
     else:
-        feedback.append("✅ Good speaking pace.")
+        feedback.append("Good speaking pace.")
 
     # Filler feedback
     if filler_count > 5:
-        feedback.append("⚠️ Too many filler words. Practice cleaner delivery.")
+        feedback.append("Too many filler words. Practice cleaner delivery.")
     else:
-        feedback.append("✅ Good fluency.")
+        feedback.append("Good fluency.")
 
     # Language-aware suggestion
     if language != "en":
-        feedback.append("🌍 Try mixing a bit more English for wider audience reach.")
+        feedback.append("Try mixing a bit more English for wider audience reach.")
 
     # Confidence estimation (basic logic)
     confidence_score = 10 - (filler_count * 0.5) - abs(wpm - 140) / 20
     confidence_score = max(1, min(10, confidence_score))
-    feedback.append(f"💪 Confidence Score: {round(confidence_score, 1)}/10")
+    feedback.append(f"Confidence Score: {round(confidence_score, 1)}/10")
 
     # Feature 4: Overall performance label.
     performance_label = get_performance_label(confidence_score)
@@ -439,8 +421,8 @@ if audio_file:
     # Feature 2: Save user-specific progress after each completed analysis.
     progress_signature = (
         safe_username,
-        audio_file.name,
-        getattr(audio_file, "size", 0),
+        source_label,
+        audio_signature,
         word_count,
         round(wpm, 2),
         filler_count,
@@ -456,51 +438,53 @@ if audio_file:
     # Feature 5: Better page organization with tabs instead of one long results page.
     st.divider()
     analysis_tab, ai_feedback_tab, progress_tab = st.tabs([
-        "📊 Analysis",
-        "🤖 AI Feedback",
-        "📈 Progress"
+        "Analysis",
+        "AI Feedback",
+        "Progress"
     ])
 
+    widget_key = hashlib.sha1(str(progress_signature).encode("utf-8")).hexdigest()[:12]
+
     with analysis_tab:
-        st.subheader("📝 Transcription")
+        st.subheader("Transcription")
         st.write(text)
-        st.write(f"🌍 Detected Language: **{language.upper()}**")
+        st.write(f"Detected Language: **{language.upper()}**")
 
-        st.subheader("📊 Analysis")
-        st.write(f"🧾 Total Words: {word_count}")
-        st.write(f"⚡ Speaking Speed: {round(wpm, 2)} WPM")
-        st.write(f"🗣️ Filler Words Used: {filler_count}")
+        st.subheader("Analysis")
+        st.write(f"Total Words: {word_count}")
+        st.write(f"Speaking Speed: {round(wpm, 2)} WPM")
+        st.write(f"Filler Words Used: {filler_count}")
         # Feature 4: Display overall performance based on the current confidence score.
-        st.write(f"🏆 Overall Performance: {performance_label}")
+        st.write(f"Overall Performance: {performance_label}")
 
-        st.subheader("🚩 Speech Quality Flags")
+        st.subheader("Speech Quality Flags")
         if flags:
             for f in flags:
                 st.write(f)
         else:
-            st.write("✅ No major structural issues detected.")
+            st.write("No major structural issues detected.")
 
-        st.subheader("📌 Sentence Review")
+        st.subheader("Sentence Review")
         if weak_sentences:
             for sentence in weak_sentences:
-                st.write(f"⚠️ Weak sentence: {sentence}")
+                st.write(f"Weak sentence: {sentence}")
         else:
-            st.write("✅ No obvious weak sentences detected.")
+            st.write("No obvious weak sentences detected.")
 
-        st.subheader("🔍 Filler Word Highlight")
+        st.subheader("Filler Word Highlight")
         st.markdown(highlighted_text)
 
-        st.subheader("🧠 Feedback")
+        st.subheader("Feedback")
         for f in feedback:
             st.write(f)
 
         detected_fillers = [w for w in speech_words if w in filler_words]
-        st.write(f"🧠 Detected filler words: {', '.join(detected_fillers)}")
+        st.write(f"Detected filler words: {', '.join(detected_fillers)}")
 
     with ai_feedback_tab:
-        st.subheader("🤖 AI Feedback")
+        st.subheader("AI Feedback")
 
-        if st.button("Generate AI Feedback"):
+        if st.button("Generate AI Feedback", key=f"ai_feedback_{widget_key}"):
             with st.spinner("Generating AI feedback..."):
                 ai_feedback, ai_error = generate_gemini_feedback(
                     text,
@@ -518,21 +502,21 @@ if audio_file:
                 st.write(ai_feedback)
 
         if os.getenv("GEMINI_API_KEY"):
-            st.write("🟢 Using Gemini API")
+            st.write("Using Gemini API")
         else:
-            st.write("🟡 Using Local Fallback")
+            st.write("Using Local Fallback")
 
     with progress_tab:
-        st.subheader("📈 Progress History")
+        st.subheader("Progress History")
         st.caption(f"Showing progress for {username.strip()}")
         st.dataframe(progress_df.tail(5), width="stretch")
 
-        st.subheader("📌 Improvement Metrics")
+        st.subheader("Improvement Metrics")
         for message in calculate_improvement_messages(progress_df):
             st.write(message)
 
         # Feature 3: Analytics charts using Streamlit native line charts.
-        st.subheader("📉 Analytics Trends")
+        st.subheader("Analytics Trends")
         chart_df = progress_df.tail(10).copy()
 
         if chart_df.empty:
@@ -549,6 +533,84 @@ if audio_file:
 
             st.write("WPM Trend")
             st.line_chart(chart_df[["wpm"]])
+
+
+# ---------------- UI ----------------
+st.set_page_config(page_title="Clarityn", layout="centered")
+
+st.title("Clarityn")
+st.caption("AI-powered speaking intelligence.")
+# Feature 5: Better page organization with clearer top controls.
+st.write("Upload or record your speech and receive detailed AI-powered speaking analysis, coaching feedback, and progress tracking.")
+st.divider()
+
+# Feature 1: Lightweight user profile input near the top, without auth or passwords.
+username = st.text_input("Enter your name")
+safe_username = sanitize_username(username)
+progress_file = None
+
+if username and not safe_username:
+    st.warning("Please enter at least one letter or number for your name.")
+elif safe_username:
+    # Feature 1: Automatically create the user's progress file if it does not exist.
+    progress_file = get_progress_file(safe_username)
+    ensure_progress_file(progress_file)
+
+# Existing feature: Coaching style selector near the top of the UI.
+feedback_mode = st.selectbox(
+    "Coaching Style",
+    ["Balanced", "Strict"]
+)
+st.divider()
+
+# ---------------- Audio Input ----------------
+upload_tab, record_tab = st.tabs(["Upload Audio", "Record Live"])
+
+with upload_tab:
+    # Feature 5: Better page organization starts with a focused upload section.
+    st.subheader("Upload Speech")
+    audio_file = st.file_uploader("Upload audio", type=["mp3", "wav", "m4a"])
+
+    if audio_file:
+        audio_bytes = audio_file.getvalue()
+        audio_path = write_temp_audio(audio_bytes, os.path.splitext(audio_file.name)[1] or ".audio")
+        try:
+            analyze_audio(
+                audio_path,
+                (audio_file.name, getattr(audio_file, "size", len(audio_bytes))),
+                "upload"
+            )
+        finally:
+            if os.path.exists(audio_path):
+                os.unlink(audio_path)
+
+with record_tab:
+    st.subheader("🎙️ Record Live Speech")
+
+    if mic_recorder is None:
+        st.error("Live recording requires the streamlit-mic-recorder package. Add it to requirements.txt and install it locally.")
+    else:
+        recorded_audio = mic_recorder(
+            start_prompt="Start recording",
+            stop_prompt="Stop recording",
+            just_once=False,
+            use_container_width=True,
+            key="live_speech_recorder"
+        )
+
+        if recorded_audio and recorded_audio.get("bytes"):
+            recorded_bytes = recorded_audio["bytes"]
+            st.audio(recorded_bytes)
+
+            audio_hash = hashlib.sha1(recorded_bytes).hexdigest()
+            suffix = get_audio_suffix(recorded_audio.get("format", "wav"))
+            audio_path = write_temp_audio(recorded_bytes, suffix)
+
+            try:
+                analyze_audio(audio_path, audio_hash, "recording")
+            finally:
+                if os.path.exists(audio_path):
+                    os.unlink(audio_path)
 
 st.divider()
 st.caption("Built with Whisper + Gemini AI")
