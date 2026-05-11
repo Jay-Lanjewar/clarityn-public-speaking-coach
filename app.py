@@ -1,4 +1,4 @@
-import streamlit as st
+﻿import streamlit as st
 import whisper
 import tempfile
 import os
@@ -521,11 +521,6 @@ def analyze_audio(audio_path, audio_signature, source_label):
                 st.error(ai_error)
             else:
                 st.write(ai_feedback)
-
-        if os.getenv("GEMINI_API_KEY"):
-            st.write("Using Gemini API")
-        else:
-            st.write("Using Local Fallback")
 
     with progress_tab:
         st.subheader("Progress History")
