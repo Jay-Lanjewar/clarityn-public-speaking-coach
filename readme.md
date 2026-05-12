@@ -1,5 +1,7 @@
 # Clarityn
 
+**[▶ Try it live →](https://clarityn-jay.streamlit.app/)**
+
 **AI-powered speaking intelligence.**
 
 Clarityn is an AI-powered public speaking coach built with Streamlit, Whisper, and Gemini AI. It analyzes uploaded speech recordings and provides detailed coaching feedback, speaking analytics, filler-word detection, sentence-level review, and progress tracking.
