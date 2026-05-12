@@ -1,4 +1,4 @@
-﻿import streamlit as st
+import streamlit as st
 import whisper
 import tempfile
 import os
@@ -51,6 +51,7 @@ print("FFMPEG DETECTED:", configure_ffmpeg())
 # Feature 1: Lightweight user profile storage folder.
 DATA_DIR = "data"
 PROGRESS_FIELDS = ["timestamp", "word_count", "wpm", "filler_count", "confidence_score"]
+MIN_AUDIO_BYTES = 2048
 
 
 def sanitize_username(username):
@@ -313,6 +314,13 @@ def write_temp_audio(audio_bytes, suffix):
         return tmp.name
 
 
+def is_valid_audio_file(audio_path):
+    try:
+        return os.path.exists(audio_path) and os.path.getsize(audio_path) >= MIN_AUDIO_BYTES
+    except OSError:
+        return False
+
+
 def analyze_audio(audio_path, audio_signature, source_label):
     global progress_file
 
@@ -323,6 +331,10 @@ def analyze_audio(audio_path, audio_signature, source_label):
 
     # Feature 1 and 2: Each user gets a separate local progress CSV.
     progress_file = progress_file or get_progress_file(safe_username)
+
+    if not is_valid_audio_file(audio_path):
+        st.warning("⚠️ Audio recording appears empty or too short. Please record again.")
+        return
 
     stage_progress = st.progress(0, text="Preparing speech analysis...")
     stage_status = st.status("Analyzing speech", expanded=True)
@@ -335,11 +347,23 @@ def analyze_audio(audio_path, audio_signature, source_label):
     stage_progress.progress(30, text="\U0001f9e0 Transcribing speech...")
 
     # Changed: initialize cached Whisper model before transcription.
-    model = load_model()
-    result = model.transcribe(audio_path)
+    try:
+        model = load_model()
+        result = model.transcribe(audio_path)
+    except Exception:
+        stage_status.update(label="⚠️ Speech analysis failed", state="error", expanded=True)
+        stage_progress.progress(100, text="⚠️ Speech analysis failed")
+        st.warning("⚠️ Speech analysis failed. Please try another recording.")
+        return
 
-    text = result["text"]
+    text = result.get("text", "").strip()
     language = result.get("language", "unknown")
+
+    if not text or not result.get("segments"):
+        stage_status.update(label="⚠️ Audio too short", state="error", expanded=True)
+        stage_progress.progress(100, text="⚠️ Audio recording appears empty or too short")
+        st.warning("⚠️ Audio recording appears empty or too short. Please record again.")
+        return
 
     stage_status.update(label="\U0001f4ca Analyzing speaking patterns...", state="running")
     stage_status.write("\U0001f4ca Analyzing speaking patterns...")
