@@ -1,4 +1,4 @@
-import streamlit as st
+﻿import streamlit as st
 import whisper
 import tempfile
 import os
@@ -653,4 +653,3 @@ with record_tab:
                     os.unlink(audio_path)
 
 st.divider()
-st.caption("Built with Whisper + Gemini AI")
