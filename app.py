@@ -148,10 +148,13 @@ def get_performance_label(confidence_score):
 
 # Gemini feedback with local fallback.
 def generate_gemini_feedback(text, word_count, wpm, filler_count, feedback_mode, flags, sentences):
-    # Feature 1: Coaching style selector changes the AI coach persona dynamically.
+    # Coaching style selector changes the AI coach persona dynamically.
     coach_persona = {
-        "Balanced": "You are a supportive but honest public speaking coach.",
-        "Strict": "You are a brutally honest and highly critical public speaking coach.",
+        "Supportive Coach": "You are an encouraging and supportive public speaking coach who focuses on building confidence and providing gentle, constructive feedback.",
+        "Strict Coach": "You are a brutally honest and highly critical public speaking coach. You do not sugarcoat anything.",
+        "Debate Coach": "You are a debate coach focused on logic, clarity, and confidence. You critique argument structure, reasoning, and persuasive delivery.",
+        "Interview Coach": "You are an interview coach focused on conciseness, professionalism, and impact. You evaluate how answers are structured and how clearly key points are communicated.",
+        "TED-style Coach": "You are a TED-style speaking coach focused on storytelling, audience engagement, and memorable delivery. You prioritize narrative flow, emotional connection, and impactful messaging.",
     }.get(feedback_mode, "You are a supportive but honest public speaking coach.")
 
     api_key = os.getenv("GEMINI_API_KEY")
@@ -184,11 +187,14 @@ def generate_gemini_feedback(text, word_count, wpm, filler_count, feedback_mode,
         if not tips:
             tips.append("Keep practicing with the same structure and focus on stronger vocal variety.")
 
-        style_note = (
-            "This is balanced feedback: supportive, honest, and practical."
-            if feedback_mode == "Balanced"
-            else "This is strict feedback: direct, critical, and demanding."
-        )
+        style_notes_map = {
+            "Supportive Coach": "This is supportive coaching: encouraging, gentle, and focused on building confidence.",
+            "Strict Coach": "This is strict coaching: direct, critical, and demanding.",
+            "Debate Coach": "This is debate coaching: focused on logic, clarity, and persuasive reasoning.",
+            "Interview Coach": "This is interview coaching: focused on conciseness, professionalism, and impact.",
+            "TED-style Coach": "This is TED-style coaching: focused on storytelling, engagement, and memorable delivery.",
+        }
+        style_note = style_notes_map.get(feedback_mode, "This is balanced feedback: supportive, honest, and practical.")
 
         fallback_feedback = f"""
 Coaching Style: {feedback_mode}
@@ -209,6 +215,13 @@ Coaching Style: {feedback_mode}
         client = genai.Client(api_key=api_key)
 
         grammar_hint = "The speech may contain grammatical inconsistencies or unnatural phrasing."
+        focus_areas = {
+            "Supportive Coach": "encouragement and gentle improvement suggestions",
+            "Strict Coach": "harsh critique and high standards",
+            "Debate Coach": "logical structure, argument clarity, and persuasive confidence",
+            "Interview Coach": "conciseness, professionalism, answer structure, and clarity under pressure",
+            "TED-style Coach": "storytelling, narrative flow, emotional connection, and audience engagement",
+        }.get(feedback_mode, "balanced speaking improvement")
 
         prompt = f"""
 {coach_persona}
@@ -231,6 +244,7 @@ RULES:
 - Do NOT say "no major weakness"
 - Be critical and specific
 - Match the selected coaching style: {feedback_mode}
+- Focus your analysis on: {focus_areas}
 
 Give:
 1. Strengths
@@ -279,11 +293,14 @@ Give:
         if not tips:
             tips.append("Work on stronger openings and more expressive delivery.")
 
-        style_note = (
-            "This is balanced feedback: supportive, honest, and practical."
-            if feedback_mode == "Balanced"
-            else "This is strict feedback: direct, critical, and demanding."
-        )
+        style_notes_map = {
+            "Supportive Coach": "This is supportive coaching: encouraging, gentle, and focused on building confidence.",
+            "Strict Coach": "This is strict coaching: direct, critical, and demanding.",
+            "Debate Coach": "This is debate coaching: focused on logic, clarity, and persuasive reasoning.",
+            "Interview Coach": "This is interview coaching: focused on conciseness, professionalism, and impact.",
+            "TED-style Coach": "This is TED-style coaching: focused on storytelling, engagement, and memorable delivery.",
+        }
+        style_note = style_notes_map.get(feedback_mode, "This is balanced feedback: supportive, honest, and practical.")
 
         fallback_feedback = f"""
     Coaching Style: {feedback_mode}
@@ -300,6 +317,229 @@ Give:
     """
 
         return fallback_feedback, None
+
+
+# Speech Structure Analysis
+def analyze_speech_structure(text, sentences):
+    issues = []
+    suggestions = []
+    text_lower = text.lower()
+
+    weak_opening_patterns = [
+        r"^today\b", r"^so\b", r"^hi\b", r"^hello\b", r"^hey\b",
+        r"i(?:'m| am) going to (?:talk|speak|discuss|present)",
+        r"i will (?:talk|speak|discuss|present)",
+        r"my (?:topic|presentation|speech|talk).*(?:is|will be|is about)",
+    ]
+    opening_match = None
+    for p in weak_opening_patterns:
+        m = re.search(p, text_lower)
+        if m:
+            opening_match = m.group()
+            break
+
+    if opening_match:
+        issues.append(("Weak Opening", f'"{opening_match}" is a generic opening. Start with a hook, question, or bold statement instead.'))
+        suggestions.append("Open with a compelling hook: a surprising fact, rhetorical question, or bold claim.")
+
+    conclusion_markers = ["in conclusion", "to sum up", "to summarize", "in summary", "overall", "finally", "let me leave you with", "thank you"]
+    has_conclusion = any(marker in text_lower[-300:] for marker in conclusion_markers) if len(text) > 100 else False
+    if not has_conclusion:
+        issues.append(("Weak Conclusion", "The speech ends without a clear concluding statement."))
+        suggestions.append("End with a strong conclusion that reinforces your main message or includes a call to action.")
+
+    transition_words = [
+        "however", "moreover", "furthermore", "additionally", "nevertheless",
+        "on the other hand", "therefore", "thus", "consequently", "in addition",
+        "as a result", "for example", "for instance", "specifically", "in particular",
+        "firstly", "secondly", "finally"
+    ]
+    transition_count = sum(1 for t in transition_words if re.search(rf'\b{re.escape(t)}\b', text_lower))
+    if transition_count < 2 and len(sentences) >= 3:
+        issues.append(("Abrupt Transitions", "Limited use of transition words makes the speech feel choppy."))
+        suggestions.append("Use transition phrases like 'however', 'for example', or 'as a result' to connect ideas smoothly.")
+
+    words_list = text.split()
+    if words_list and len(set(words_list)) / len(words_list) < 0.55:
+        issues.append(("Repetitive Wording", "Vocabulary is too repetitive — many words are reused."))
+        suggestions.append("Use synonyms and vary your word choice to keep the audience engaged.")
+
+    storytelling_markers = [
+        "i remember", "for example", "for instance", "let me tell you",
+        "picture this", "imagine", "when i", "one time", "a story",
+        "let me share", "i recall", "here's a", "consider this"
+    ]
+    story_count = sum(1 for m in storytelling_markers if m in text_lower)
+    if story_count < 2 and len(words_list) >= 20:
+        issues.append(("Lack of Storytelling", "No personal stories, examples, or anecdotes found."))
+        suggestions.append("Weave in a short personal story, example, or analogy to make your message memorable.")
+
+    engagement_markers = [
+        r"\?", r"you might", r"have you ever", r"think about", r"imagine",
+        r"consider this", r"here's the thing", r"the truth is",
+        r"what if", r"you"
+    ]
+    engagement_count = sum(1 for m in engagement_markers if re.search(m, text_lower))
+    if engagement_count < 3 and len(words_list) >= 30:
+        issues.append(("Low Audience Engagement", "The speech doesn't directly engage the audience."))
+        suggestions.append("Ask rhetorical questions, use 'you' to address the audience directly, and invite them to imagine scenarios.")
+
+    return issues, suggestions
+
+
+# AI Rewrite Suggestions
+def suggest_improvements(text, sentences):
+    suggestions = []
+
+    for s in sentences:
+        s_stripped = s.strip()
+        if not s_stripped or len(s_stripped) < 10:
+            continue
+        s_lower = s_stripped.lower()
+
+        if re.search(r"today\s+i(?:'m| am)?\s+(?:going to|will|want to)\s+(?:talk|speak|discuss|present)", s_lower):
+            suggestions.append({
+                "original": s_stripped[:80],
+                "improved": "Start with a bold statement or question that grabs attention immediately."
+            })
+            break
+
+    for s in sentences:
+        s_stripped = s.strip()
+        if not s_stripped or len(s_stripped) < 10:
+            continue
+        s_lower = s_stripped.lower()
+
+        if re.search(r'\bi\s+think\s+(that\s+)?', s_lower):
+            improved = re.sub(r'\bi\s+think\s+(that\s+)?', '', s_stripped, count=1, flags=re.IGNORECASE).strip().capitalize()
+            if len(improved) > 5:
+                suggestions.append({
+                    "original": s_stripped[:80],
+                    "improved": improved[:80]
+                })
+                break
+
+    for s in sentences:
+        s_stripped = s.strip()
+        if not s_stripped or len(s_stripped) < 10:
+            continue
+        s_lower = s_stripped.lower()
+
+        m = re.search(r'\bi\s+want\s+to\s+(talk|speak|discuss)\s+about', s_lower)
+        if m:
+            suggestions.append({
+                "original": s_stripped[:80],
+                "improved": "Make a direct statement about your topic instead of announcing your intention."
+            })
+            break
+
+    for s in sentences:
+        s_stripped = s.strip()
+        if not s_stripped or len(s_stripped) < 10:
+            continue
+        s_lower = s_stripped.lower()
+
+        if re.search(r'\bvery\s+\w+', s_lower):
+            suggestions.append({
+                "original": s_stripped[:80],
+                "improved": re.sub(r'\bvery\s+(\w+)', r'use a stronger word than \1', s_stripped, count=1, flags=re.IGNORECASE)[:80]
+            })
+            break
+
+    for s in sentences:
+        s_stripped = s.strip()
+        if not s_stripped or len(s_stripped) < 10:
+            continue
+        s_lower = s_stripped.lower()
+
+        if re.search(r'\bjust\b', s_lower):
+            improved = re.sub(r'\bjust\s+', '', s_stripped, count=1, flags=re.IGNORECASE).strip()
+            if len(improved) > 5:
+                suggestions.append({
+                    "original": s_stripped[:80],
+                    "improved": improved[:80]
+                })
+                break
+
+    for s in sentences:
+        s_stripped = s.strip()
+        if len(s_stripped.split()) > 30:
+            suggestions.append({
+                "original": s_stripped[:80],
+                "improved": "Break this into shorter sentences for better clarity and impact."
+            })
+            break
+
+    return suggestions
+
+
+# Audience Engagement Score
+def calculate_engagement_score(text, wpm, word_count, sentences, flags):
+    score = 5.0
+    reasons = []
+
+    words = text.split()
+    if not words:
+        return 1.0, ["No speech content to analyze."]
+
+    sentence_starts = set()
+    valid_sentences = [s for s in sentences if s.strip()]
+    for s in valid_sentences:
+        first_word = s.strip().split()[0].lower() if s.strip().split() else ""
+        if first_word:
+            sentence_starts.add(first_word)
+
+    variety_ratio = len(sentence_starts) / max(len(valid_sentences), 1)
+    if variety_ratio > 0.6:
+        score += 1.5
+        reasons.append("Good sentence variety — you vary how you start sentences.")
+    elif variety_ratio > 0.4:
+        score += 0.5
+        reasons.append("Moderate sentence variety — try more diverse sentence openings.")
+    else:
+        score -= 1.0
+        reasons.append("Low sentence variety — most sentences start the same way.")
+
+    question_count = text.count("?")
+    exclamation_count = text.count("!")
+    if question_count >= 2:
+        score += 1.0
+        reasons.append("Good use of rhetorical questions to engage the audience.")
+    if exclamation_count >= 2:
+        score += 0.5
+        reasons.append("Good use of emphasis with exclamatory phrases.")
+
+    if 130 <= wpm <= 150:
+        score += 1.5
+        reasons.append("Excellent pacing — ideal speaking speed keeps the audience engaged.")
+    elif 120 <= wpm <= 170:
+        score += 0.5
+        reasons.append("Good pacing — within comfortable speaking range.")
+    elif wpm > 180:
+        score -= 1.0
+        reasons.append("Speaking too fast — audience may struggle to keep up.")
+    elif wpm < 110:
+        score -= 1.0
+        reasons.append("Speaking too slow — energy and attention may drop.")
+
+    unique_ratio = len(set(words)) / max(len(words), 1)
+    if unique_ratio > 0.65:
+        score += 1.0
+        reasons.append("Rich vocabulary — good use of diverse words.")
+    elif unique_ratio < 0.5:
+        score -= 1.0
+        reasons.append("Too much word repetition — use more varied vocabulary.")
+
+    structure_flags = [f for f in flags if f]
+    if len(structure_flags) == 0:
+        score += 1.0
+        reasons.append("Good speech structure — clear organization and flow.")
+    elif len(structure_flags) >= 3:
+        score -= 1.0
+        reasons.append("Speech structure needs improvement — work on openings, transitions, and conclusions.")
+
+    score = max(1.0, min(10.0, score))
+    return round(score, 1), reasons
 
 
 def get_audio_suffix(audio_format, default="wav"):
@@ -426,6 +666,15 @@ def analyze_audio(audio_path, audio_signature, source_label):
             highlighted_text
         )
 
+    # Speech structure analysis
+    structure_issues, structure_suggestions = analyze_speech_structure(text, sentences)
+
+    # Rewrite suggestions
+    rewrite_suggestions = suggest_improvements(text, sentences)
+
+    # Engagement score
+    engagement_score, engagement_reasons = calculate_engagement_score(text, wpm, word_count, sentences, flags)
+
     stage_status.update(label="\U0001f916 Generating AI feedback...", state="running")
     stage_status.write("\U0001f916 Generating AI feedback...")
     stage_progress.progress(85, text="\U0001f916 Generating AI feedback...")
@@ -501,6 +750,31 @@ def analyze_audio(audio_path, audio_signature, source_label):
         st.write(f"Filler Words Used: {filler_count}")
         # Feature 4: Display overall performance based on the current confidence score.
         st.write(f"Overall Performance: {performance_label}")
+
+        # Audience Engagement Score
+        st.subheader("🔥 Audience Engagement Score")
+        st.write(f"**{engagement_score}/10**")
+        for reason in engagement_reasons:
+            st.write(f"- {reason}")
+
+        # Speech Structure Review
+        st.subheader("🎯 Speech Structure Review")
+        if structure_issues:
+            for issue_type, issue_desc in structure_issues:
+                st.write(f"**{issue_type}:** {issue_desc}")
+            st.markdown("**Suggestions:**")
+            for sug in structure_suggestions:
+                st.write(f"- {sug}")
+        else:
+            st.write("No major structural issues detected. Your speech has good structure and flow.")
+
+        # Suggested Improvements
+        if rewrite_suggestions:
+            st.subheader("✍️ Suggested Improvements")
+            for r in rewrite_suggestions:
+                st.write(f"**Weak:** \"{r['original']}\"")
+                st.write(f"**Improved:** {r['improved']}")
+                st.markdown("---")
 
         st.subheader("Speech Quality Flags")
         if flags:
@@ -596,10 +870,10 @@ elif safe_username:
     progress_file = get_progress_file(safe_username)
     ensure_progress_file(progress_file)
 
-# Existing feature: Coaching style selector near the top of the UI.
+# Coaching style selector near the top of the UI.
 feedback_mode = st.selectbox(
     "Coaching Style",
-    ["Balanced", "Strict"]
+    ["Supportive Coach", "Strict Coach", "Debate Coach", "Interview Coach", "TED-style Coach"]
 )
 st.divider()
 
